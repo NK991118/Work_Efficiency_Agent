@@ -1,0 +1,15 @@
+.idea
+.DS_Store
+.git
+.github
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.dockerignore
+Dockerfile
+*.md
+*.sh
+*.yml
+.env
