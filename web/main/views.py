@@ -312,6 +312,15 @@ def search_dense(q, k):
         )
         if len(rows) >= k:
             break
+        
+        def lexical_bonus(row, q: str) -> int:
+            q_tokens = [t for t in q.lower().split() if t]
+            title = (row.get("title") or "").lower()
+            src = (row.get("source") or "").lower()
+            return sum(1 for t in q_tokens if (t in title or t in src))
+        
+    rows.sort(key=lambda r: lexical_bonus(r, q), reverse=True)
+
     return rows
 
 
