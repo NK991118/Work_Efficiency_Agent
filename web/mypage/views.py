@@ -10,10 +10,16 @@ from main.models import Card, ChatImage
 from uauth.models import ApiKey, Department, Rank, Gender
 from uauth.aws_s3_service import S3Client
 
+import os
+from django.conf import settings
+from django.core.files.storage import default_storage
+
+from django.utils.dateparse import parse_date
+
 
 @login_required
 def mypage(request):
-    # [GET] 페이지 로딩
+    # 페이지 로딩
     all_cards = request.user.cards.select_related("session").order_by("-created_at")
     api_cards = all_cards.filter(session__mode="api")
     internal_cards = all_cards.filter(session__mode="internal")
@@ -37,7 +43,7 @@ def mypage(request):
 
 @login_required
 def create_api_key(request):
-    # [POST] API 키 저장
+    # API 키 저장
     if request.method == "POST":
         key_name = request.POST.get("api_key_name")
         key_value = request.POST.get("api_key_value")
@@ -73,11 +79,22 @@ def mypage_edit(request):
             if phone:
                 request.user.phone = phone
             if birthday:
-                request.user.birthday = birthday
+                request.user.birthday = parse_date(birthday)
             if profile_image:
-                s3_client = S3Client()
-                image_url = s3_client.upload(profile_image)
-                request.user.profile_image = image_url
+                if settings.DEBUG:
+                    # 로컬 저장
+                    save_path = os.path.join("profile_image", profile_image.name)
+                    stored_name = default_storage.save(save_path, profile_image)
+                    relative_url = default_storage.url(stored_name)
+                    image_url = request.build_absolute_uri(relative_url)
+                    request.user.profile_image = image_url
+                else:
+                    # 운영에서만 S3 업로드
+                    s3_client = S3Client()
+                    image_url = s3_client.upload(profile_image)
+                    if image_url:
+                        request.user.profile_image = image_url
+
 
             request.user.save()
 
@@ -124,7 +141,7 @@ def card_detail(request, card_id):
 
 
 @login_required
-def check_api_key_name(request):  # API 키 이름의 중복 여부 - ajax
+def check_api_key_name(request):
     if request.method == "GET":
         key_name = request.GET.get("name", None)
         is_taken = ApiKey.objects.filter(user=request.user, name=key_name).exists()
