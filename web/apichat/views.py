@@ -24,9 +24,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 제목 요약을 위한 LangChain용 LLM (모델명은 상황에 맞게)
+# 제목 요약을 위한 LangChain용 LLM
 title_llm = ChatOpenAI(
-    model="gpt-4o",  # 또는 OPENAI_TITLE_MODEL
+    model="gpt-4o",
     temperature=0.2,
     max_tokens=30,
 )
@@ -53,7 +53,7 @@ title_prompt = PromptTemplate.from_template(
 title_chain = title_prompt | title_llm | StrOutputParser()
 
 
-# 연관 질문 추천 모델 지정 (환경변수 fallback)
+# 연관 질문 추천 모델 지정
 suggest_model = os.getenv("OPENAI_SUGGEST_MODEL", "gpt-4o-mini")
 
 # LangChain LLM 객체
@@ -85,11 +85,6 @@ suggest_prompt = PromptTemplate.from_template(
 
 # 체인 구성
 suggest_chain = suggest_prompt | suggest_llm | StrOutputParser()
-
-
-# 제목 요약 #
-# PRODUCTS = r"(Google Sheets|Sheets|Gmail|Drive|Calendar|Maps|Docs|Slides)"
-# KEYWORDS  = r"(batchUpdate|insert|list|update|auth|quota|range|scope|error|permission)"
 
 OPENAI_TITLE_MODEL = os.getenv("OPENAI_TITLE_MODEL", "gpt-4o-mini")
 
@@ -126,16 +121,15 @@ def tokens(s: str) -> list[str]:
 
 def is_echo_like(
     title: str, source: str, *, hard_ratio: float = 0.9, token_ratio: float = 0.8
-) -> bool:  # NEW
+) -> bool:
     """질문 원문을 거의 그대로 베낀 제목인지 판정"""
     t, s = norm(title), norm(source)
     if not t or not s:
         return False
-    if t in s:  # 부분 복붙
+    if t in s:
         return True
-    if SequenceMatcher(None, t, s).ratio() >= hard_ratio:  # 문자 유사도
+    if SequenceMatcher(None, t, s).ratio() >= hard_ratio:
         return True
-    # 토큰 자카드
     A, B = set(tokens(title)), set(tokens(source))
     if A and B and len(A & B) / len(A | B) >= token_ratio:
         return True
@@ -274,20 +268,16 @@ def update_session_title_inline(session, all_messages):
             session.save(update_fields=["title"])
 
 
-# 제목 요약 #
-
-
+# 제목 요약
 @csrf_exempt
 @login_required
 def chat(request):
     if request.method == "POST":
         try:
-            # FormData에서 데이터 추출
             user_message = request.POST.get("message")
             session_id = request.POST.get("session_id")
-            image_file = request.FILES.get("image")  # 이미지 파일
+            image_file = request.FILES.get("image")
 
-            # 세션 확인
             if not session_id:
                 return JsonResponse({"error": "세션 ID가 필요합니다."}, status=400)
 
@@ -312,7 +302,7 @@ def chat(request):
 
             db_chat_history.append({"role": "user", "content": user_message})
 
-            # 이미지 처리 - 파일을 S3에 업로드
+            # S3에 업로드
             image_url = None
             if image_file:
                 s3_client = S3Client()
@@ -322,7 +312,7 @@ def chat(request):
                         {"error": "이미지 업로드에 실패했습니다."}, status=500
                     )
 
-            # RAG 봇 호출 - 이미지 URL 전달
+            # RAG 봇 호출, 이미지 URL 전달
             try:
                 response = run_langraph(
                     user_message, session_id, image_url, db_chat_history
@@ -341,10 +331,16 @@ def chat(request):
             # 이미지 URL이 있으면 ChatImage 객체 생성
             if image_url:
                 ChatImage.objects.create(message=user_msg, image_url=image_url)
+                
+            # 추천 질문 생성(assistant 저장 전)
+            suggestions = generate_suggestions(user_message, response, k=5)
 
             # 봇 응답 저장
             ChatMessage.objects.create(
-                session=session, role="assistant", content=response
+                session=session,
+                role="assistant",
+                content=response,
+                suggestions=suggestions
             )
 
             # 제목 갱신
@@ -353,10 +349,6 @@ def chat(request):
             )
             update_session_title_inline(session, all_msgs)
 
-            # 추천 질문 생성
-            suggestions = generate_suggestions(user_message, response, k=5)
-
-            # 응답에 이미지 URL 포함
             response_data = {
                 "success": True,
                 "bot_message": response,
@@ -450,7 +442,7 @@ def get_chat_history(request, session_id):
         # 해당 세션의 모든 메시지 조회
         messages = ChatMessage.objects.filter(session=session).order_by("created_at")
 
-        # JSON 형태로 변환 (이미지 URL 포함)
+        # JSON 형태 변환 (이미지 URL 포함)
         data = []
         for msg in messages:
             message_data = {
@@ -459,6 +451,7 @@ def get_chat_history(request, session_id):
                 "content": msg.content,
                 "created_at": msg.created_at.isoformat(),
                 "images": [],
+                "suggestions": getattr(msg, "suggestions", [])
             }
 
             # 해당 메시지의 이미지들 조회
@@ -498,7 +491,6 @@ def delete_session(request, session_id):
 
 
 @csrf_exempt
-# @login_required
 def create_session(request):
     """새 채팅 세션 생성"""
     if request.method == "POST":
@@ -551,10 +543,10 @@ def save_card(request):
     message_ids = data.get("message_ids") or []
     title = (data.get("title") or "").strip()
 
-    # 1) 소유권/세션 확인
+    # 소유권/세션 확인
     session = get_object_or_404(ChatSession, id=session_id, user=request.user)
 
-    # 2) 메시지 유효성(모두 이 세션 소속?)
+    # 메시지 유효성(모두 이 세션 소속인지)
     msgs = list(
         ChatMessage.objects.filter(session=session, id__in=message_ids).order_by(
             "created_at"
@@ -631,17 +623,24 @@ def generate_suggestions(user_q: str, answer: str, k: int = 5) -> list[str]:
     """
     LangChain 기반 후속 질문 생성 함수
     """
+
     try:
-        # LangChain chain 실행
         raw_output = suggest_chain.invoke(
             {
                 "user_q": user_q,
                 "answer": answer,
                 "k": k,
             }
+        )
+        raw_output = (raw_output or "").strip()
+        print("[suggestion raw_output repr]", repr(raw_output))
+        # json 코드 형식 제거
+        raw_output = re.sub(
+            r"^```(?:json)?\s*|\s*```$",
+            "",
+            raw_output,
+            flags=re.IGNORECASE,
         ).strip()
-
-        # JSON 파싱
         suggestions = json.loads(raw_output)
 
         # 후처리 (중복/길이/타입 체크)
@@ -658,8 +657,11 @@ def generate_suggestions(user_q: str, answer: str, k: int = 5) -> list[str]:
             out.append(s)
             if len(out) >= k:
                 break
+
         return out
 
     except Exception as e:
+        import traceback
         print(f"[suggestion error] {e}")
+        print(traceback.format_exc())
         return []

@@ -139,6 +139,7 @@ async function loadChatHistory(sessionId) {
 
     // 채팅창 초기화
     chatLog.innerHTML = "";
+    clearAllSuggestionsUI();
 
     // 메시지 히스토리 표시
     data.messages.forEach((msg) => {
@@ -150,8 +151,9 @@ async function loadChatHistory(sessionId) {
         msg.images[0] &&
         msg.images[0].url
       ) {
-        imageData = msg.images[0].url; // 이미지 URL
+        imageData = msg.images[0].url;
       }
+    
 
       addMessage(
         msg.content,
@@ -160,6 +162,20 @@ async function loadChatHistory(sessionId) {
         imageData
       );
     });
+
+    const lastAssistantMsg = [...data.messages]
+      .reverse()
+      .find((m) => m.role === "assistant");
+
+    if (lastAssistantMsg && Array.isArray(lastAssistantMsg.suggestions) && lastAssistantMsg.suggestions.length) {
+      const lastAssistantLi = [...chatLog.querySelectorAll("li.msg--assistant")].pop();
+      if (lastAssistantLi) {
+        renderSuggestions(lastAssistantLi, lastAssistantMsg.suggestions);
+      }
+    } else {
+      clearAllSuggestionsUI();
+    }
+
 
     console.log(
       `세션 ${sessionId} 히스토리 로드 완료:`,
@@ -321,9 +337,11 @@ async function sendMessage() {
 
   // 사용자 메시지 표시 (임시 Object URL)
   const displayText = message || (selectedImage ? "" : "");
+
   addMessage(displayText, "user", null, tempImageUrl);
 
-  // 입력 필드 초기화
+  clearAllSuggestionsUI();
+
   messageInput.value = "";
 
   // 이미지 미리보기 즉시 숨기기
@@ -442,7 +460,7 @@ function showImagePreview(file) {
   reader.onload = function (e) {
     const preview = document.getElementById("imagePreview");
     if (preview) {
-      preview.style.display = "block"; // 컨테이너 표시
+      preview.style.display = "block";
       preview.innerHTML = `
                 <img src="${e.target.result}" style="max-width: 200px; max-height: 200px; border-radius: 5px;">
                 <br>
@@ -525,17 +543,17 @@ async function sendAudioToServer(audioBlob) {
     const data = await response.json();
 
     if (data.success) {
-      // 1. 먼저 변환된 텍스트를 사용자 메시지로 표시
+      // 변환된 텍스트를 사용자 메시지로 표시
       addMessage(data.transcribed_text, "user");
 
-      // 2. 그 다음 봇 응답을 위한 로딩 메시지 표시
+      // 봇 응답을 위한 로딩 메시지 표시
       showLoadingMessage();
 
-      // 3. 봇 응답 표시 (로딩 메시지 제거 후)
+      // 봇 응답 표시 (로딩 메시지 제거 후)
       setTimeout(() => {
         hideLoadingMessage();
         addMessage(data.bot_response, "bot");
-      }, 1000); // 1초 후 봇 응답 표시 (실제로는 서버 응답에 따라 조정)
+      }, 1000); // 1초 후 봇 응답
     }
   } catch (error) {
     console.error("음성 전송 에러:", error);
@@ -543,27 +561,27 @@ async function sendAudioToServer(audioBlob) {
   }
 }
 
-// 엔터 키 이벤트 (Shift+Enter는 줄바꿈 유지)
+// 엔터 키 이벤트
 chatInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault(); // 줄바꿈 방지
+    event.preventDefault();
     sendMessage();
   }
 });
 
 // csrf 토큰 찾기
 function getCSRFToken() {
-  // 1) form input
+  // form input
   let token = document.querySelector("[name=csrfmiddlewaretoken]")?.value;
   if (token) return token;
 
-  // 2) meta 태그
+  // meta 태그
   token = document
     .querySelector('meta[name="csrf-token"]')
     ?.getAttribute("content");
   if (token) return token;
 
-  // 3) 쿠키
+  // 쿠키
   const cookies = document.cookie.split(";");
   for (let cookie of cookies) {
     const [name, value] = cookie.trim().split("=");
@@ -574,9 +592,9 @@ function getCSRFToken() {
   return "";
 }
 
-// ---------- 선택 모드 상태 ----------
+// 선택 모드 상태
 let selecting = false;
-let selectedIds = []; // 순서대로
+let selectedIds = [];
 
 const $chatLog = document.getElementById("chatLog");
 const $btnSelect = document.getElementById("btnCardSelect");
@@ -597,7 +615,7 @@ if (!$btnSelect || !$btnSave || !$selCount) {
     "카드 버튼 또는 카운터 요소를 찾지 못했습니다. 선택 기능을 건너뜁니다."
   );
 } else {
-  // -------- 선택 모드 ON/OFF --------
+  // 선택 모드 ON/OFF
   $btnSelect.addEventListener("click", () => {
     selecting = !selecting;
     selectedIds = [];
@@ -610,7 +628,7 @@ if (!$btnSelect || !$btnSave || !$selCount) {
     $selCount.textContent = "0개 선택";
   });
 
-  // -------- 메시지 클릭으로 선택/해제 --------
+  // 메시지 클릭으로 선택/해제
   $chatLog.addEventListener("click", (e) => {
     if (!selecting) return;
     const li = e.target.closest("li.msg");
@@ -627,7 +645,7 @@ if (!$btnSelect || !$btnSave || !$selCount) {
     updateSelectUI();
   });
 
-  // -------- 선택 UI 갱신 --------
+  // 선택 UI 갱신
   function updateSelectUI() {
     // 스타일/체크박스 표시
     [...$chatLog.querySelectorAll("li.msg")].forEach((li) => {
@@ -638,7 +656,7 @@ if (!$btnSelect || !$btnSave || !$selCount) {
         li.classList.toggle("msg--selecting", true);
         li.classList.toggle("msg--chosen", chosen);
 
-        // 체크 오버레이 (없으면 생성)
+        // 체크 오버레이
         let mark = li.querySelector(".select-mark");
         if (!mark) {
           mark = document.createElement("span");
@@ -658,7 +676,7 @@ if (!$btnSelect || !$btnSave || !$selCount) {
     $selCount.textContent = `${selectedIds.length}개 선택`;
   }
 
-  // -------- 카드 저장 --------
+  // 카드 저장
   $btnSave.addEventListener("click", async () => {
     if (!selecting) return;
     if (!selectedSessionId) {
@@ -670,7 +688,7 @@ if (!$btnSelect || !$btnSave || !$selCount) {
       return;
     }
 
-    // 제목 입력 받기. 비우면 서버가 session.title 사용
+    // 제목 입력 받기(비우면 서버가 session.title 사용)
     const raw = prompt("카드 제목(비우면 세션 제목 사용)");
 
     if (raw === null) return;
@@ -710,10 +728,15 @@ if (!$btnSelect || !$btnSave || !$selCount) {
   });
 }
 
+function clearAllSuggestionsUI() {
+  document.querySelectorAll(".suggest-row").forEach((el) => el.remove());
+}
+
+
 function renderSuggestions(afterLi, items = []) {
-  // 기존 추천 영역 있으면 제거
-  const old = afterLi.querySelector(".suggest-row");
-  if (old) old.remove();
+  // 이전 답변의 추천 질문 모두 제거
+  clearAllSuggestionsUI();
+
   if (!items.length) return;
 
   const row = document.createElement("div");

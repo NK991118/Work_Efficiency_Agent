@@ -65,7 +65,7 @@ class ChatSession(models.Model):
 
     class Meta:
         db_table = "chat_session"
-        ordering = ["-created_at"]  # 최신부터
+        ordering = ["-created_at"]
 
     def __str__(self):
         return f"[{self.mode}] {self.title}"
@@ -89,10 +89,11 @@ class ChatMessage(models.Model):
     )
     content = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+    suggestions = models.JSONField(default=list, blank=True)
 
     class Meta:
         db_table = "chat_message"
-        ordering = ["created_at"]  # 시간순
+        ordering = ["created_at"]
 
     def __str__(self):
         return f"{self.session.title}, {self.role}: {self.content[:30]}"
