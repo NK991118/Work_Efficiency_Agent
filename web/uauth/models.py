@@ -65,7 +65,6 @@ class UserManager(BaseUserManager):
 
 # User 회원가입
 class User(AbstractBaseUser, PermissionsMixin):
-    # id = 로그인 ID (문자열 PK)
     id = models.CharField(max_length=50, primary_key=True)
     email = models.EmailField(max_length=255)
     name = models.CharField(max_length=100)
@@ -87,7 +86,6 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    # AbstractBaseUser 제공: password, last_login
 
     # Django 관리용 (Django Admin/인증과 호환)
     is_active = models.BooleanField(default=True)
@@ -143,7 +141,7 @@ class ApiKey(models.Model):
 
     class Meta:
         db_table = "api_key"
-        unique_together = [("user", "name")]  # 중복 방지
+        unique_together = [("user", "name")]
         ordering = ["-created_at"]
 
     def __str__(self):
@@ -154,7 +152,6 @@ class ApiKey(models.Model):
 def sync_user_active_on_approval(sender, instance, created, **kwargs):
     user = instance.user
 
-    # is_active는 더 이상 변경하지 않음 (로그인 가능 유지)
     if instance.action == Status.APPROVED and user.status != Status.APPROVED:
         user.status = Status.APPROVED
         user.save(update_fields=["status"])
@@ -166,14 +163,18 @@ def sync_user_active_on_approval(sender, instance, created, **kwargs):
         user.save(update_fields=["status"])
 
 
-# 👇 추가된 부분 (맨 아래에 붙이세요)
-
-
 @receiver(pre_save, sender=User)
 def delete_old_profile_image(sender, instance, **kwargs):
     """프로필 이미지 변경 시, 기존 S3 이미지 삭제"""
+    
+    if settings.DEBUG:
+        return
+    
+    if not getattr(settings, "AWS_STORAGE_BUCKET_NAME2", None):
+        return
+    
     if not instance.pk:
-        return  # 새 유저 생성 시는 무시
+        return
 
     try:
         old_user = User.objects.get(pk=instance.pk)
@@ -183,11 +184,10 @@ def delete_old_profile_image(sender, instance, **kwargs):
     old_url = old_user.profile_image
     new_url = instance.profile_image
 
-    # 기본 이미지거나 같은 URL이면 삭제 안 함
     default_url = "https://skn14-codenova-profile.s3.ap-northeast-2.amazonaws.com/profile_image/default2.png"
     if old_url != new_url and old_url != default_url:
         parsed = urlparse(old_url)
-        key = parsed.path.lstrip("/")  # ex) profile_image/20250101_120000_img.png
+        key = parsed.path.lstrip("/")
 
         s3 = boto3.client(
             "s3",
@@ -195,7 +195,7 @@ def delete_old_profile_image(sender, instance, **kwargs):
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
             region_name=settings.AWS_S3_REGION_NAME,
         )
-        bucket_name = settings.AWS_STORAGE_BUCKET_NAME2  # 업로드 버킷과 동일하게 맞춤
+        bucket_name = settings.AWS_STORAGE_BUCKET_NAME2
 
         try:
             s3.delete_object(Bucket=bucket_name, Key=key)

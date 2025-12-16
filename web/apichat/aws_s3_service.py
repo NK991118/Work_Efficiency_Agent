@@ -6,6 +6,12 @@ from datetime import datetime
 
 class S3Client:
     def __init__(self):
+        if settings.DEBUG:
+            raise RuntimeError("DEBUG=True에서는 S3Client를 사용하지 않습니다. (로컬 저장 모드)")
+
+        if not settings.AWS_STORAGE_BUCKET_NAME:
+            raise RuntimeError("AWS_STORAGE_BUCKET_NAME이 설정되지 않았습니다.")
+        
         self.s3 = boto3.client(
             "s3",
             aws_access_key_id=settings.AWS_ACCESS_KEY_ID,

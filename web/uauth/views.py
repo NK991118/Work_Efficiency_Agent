@@ -3,6 +3,11 @@ import json
 
 from datetime import date
 
+import os
+from django.conf import settings
+from django.core.files.storage import default_storage
+from django.utils import timezone
+
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
@@ -18,17 +23,13 @@ from django.shortcuts import render, redirect
 from .models import User, Rank, Department, Gender, ApprovalLog, Status
 from .aws_s3_service import S3Client
 
-
-# -----------------------------
-# 유틸
-# -----------------------------
-def _wants_json(request):
+def wants_json(request):
     accept = request.headers.get("Accept", "")
     xrw = request.headers.get("X-Requested-With", "")
     return "application/json" in accept or xrw == "XMLHttpRequest"
 
 
-# 서버측 검증용(선택)
+# 서버측 검증용
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{4,20}$")
 PASSWORD_RE = re.compile(
     r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$"
@@ -36,19 +37,13 @@ PASSWORD_RE = re.compile(
 PHONE_RE = re.compile(r"^010-\d{4}-\d{4}$")
 MIN_BIRTH = date(1900, 1, 1)
 
-
-# -----------------------------
 # 로그아웃
-# -----------------------------
 @login_required
 def logout_view(request: HttpRequest) -> HttpResponse:
     logout(request)
     return redirect("uauth:login")
 
-
-# -----------------------------
 # 로그인
-# -----------------------------
 @ensure_csrf_cookie
 @csrf_protect
 @require_http_methods(["GET", "POST"])
@@ -63,7 +58,7 @@ def login_view(request):
     username = request.POST.get("username", "").strip()
     password = request.POST.get("password", "")
 
-    # 필드 유효성(프런트와 동일 규칙)
+    # 필드 유효성
     field_errors = {}
     if not username:
         field_errors["username"] = ["아이디를 입력해주세요."]
@@ -75,7 +70,7 @@ def login_view(request):
         field_errors["password"] = ["비밀번호는 4자 이상이어야 합니다."]
 
     if field_errors:
-        if _wants_json(request):
+        if wants_json(request):
             return JsonResponse(
                 {"success": False, "field_errors": field_errors}, status=400
             )
@@ -88,19 +83,19 @@ def login_view(request):
     if user is None:
         # 아이디/비밀번호 오류
         msg = "아이디 또는 비밀번호가 올바르지 않습니다."
-        if _wants_json(request):
+        if wants_json(request):
             return JsonResponse({"success": False, "message": msg}, status=400)
         return render(request, "uauth/login.html", {"username": username, "error": msg})
 
-    # 인증 성공: 세션 로그인 후 승인 상태에 따라 라우팅
+    # 인증 성공
     login(request, user)
 
-    # 최신 승인 상태(로그가 있으면 로그, 없으면 유저.status)
+    # 최신 승인 상태
     latest_log = ApprovalLog.objects.filter(user=user).order_by("-created_at").first()
     current_status = latest_log.action if latest_log else user.status
 
     if current_status == Status.PENDING:
-        if _wants_json(request):
+        if wants_json(request):
             return JsonResponse(
                 {
                     "success": True,
@@ -111,7 +106,7 @@ def login_view(request):
         return redirect("uauth:pending")
 
     if current_status == Status.REJECTED:
-        if _wants_json(request):
+        if wants_json(request):
             return JsonResponse(
                 {
                     "success": True,
@@ -121,22 +116,18 @@ def login_view(request):
             )
         return redirect("uauth:reject")
 
-    # APPROVED (기본)
-    if _wants_json(request):
+    # APPROVED
+    if wants_json(request):
         return JsonResponse(
             {"success": True, "state": "approved", "redirect_url": reverse("main:home")}
         )
     return redirect("main:home")
 
 
-# -----------------------------
 # 회원가입
-# -----------------------------
 from django import forms
 
-
 class SignUpEchoForm(forms.Form):
-    # 템플릿에서 form.userId.value 같은 접근을 위해 필드 선언
     userId = forms.CharField(required=True)
     name = forms.CharField(required=True)
     password = forms.CharField(required=True)
@@ -167,42 +158,54 @@ def signup_view(request: HttpRequest):
         return render(request, "uauth/register2.html", signup_context())
 
     # POST
-    form = SignUpEchoForm(request.POST)
-    if form.errors:
+    form = SignUpEchoForm(request.POST, request.FILES)
+    if not form.is_valid():
         return render(request, "uauth/register2.html", signup_context(form))
 
     # 값 추출
-    userId = form.data.get("userId", "").strip()
-    name = form.data.get("name", "").strip()
-    password = form.data.get("password", "")
-    confirm = form.data.get("confirmPassword", "")
-    email = form.data.get("email", "").strip()
-    role = form.data.get("role", "").strip()
-
-    team_raw = request.POST.get("team")
-    team = team_raw.strip() if team_raw else None
+    userId = form.cleaned_data["userId"].strip()
+    name = form.cleaned_data["name"].strip()
+    password = form.cleaned_data["password"]
+    confirm = form.cleaned_data["confirmPassword"]
+    email = form.cleaned_data["email"].strip()
+    role = form.cleaned_data["role"].strip()
+    
+    team = (form.cleaned_data.get("team") or "").strip() or None
     if role.lower() == "cto":
         team = None
 
-    birth_raw = form.data.get("birthDate") or ""
-    birth_dt = parse_date(birth_raw)
-    gender = form.data.get("gender", "").strip()
-    phone = form.data.get("phoneNumber", "").strip()
-    profile_image = request.FILES.get("profile_image")
+    birth_dt = form.cleaned_data["birthDate"]
+    gender = form.cleaned_data["gender"].strip()
+    phone = form.cleaned_data["phoneNumber"].strip()
+    
+    profile_image = form.cleaned_data.get("profile_image")
 
     DEFAULT_IMAGE_URL = "https://skn14-codenova-profile.s3.ap-northeast-2.amazonaws.com/profile_image/default2.png"
     image_url = DEFAULT_IMAGE_URL
+    
+    print("FILES keys:", list(request.FILES.keys()))
+    print("file_image:", profile_image, getattr(profile_image, "name", None), getattr(profile_image, "size", None))
 
+    if password != confirm:
+        form.add_error("confirmPassword", "비밀번호가 일치하지 않습니다.")
+        return render(request, "uauth/register2.html", signup_context(form))
+    
     if profile_image:
-        s3_client = S3Client()
-        uploaded_url = s3_client.upload(profile_image)
-        if uploaded_url:
-            image_url = uploaded_url
-        else:
-            # 업로드 실패 시 기본 이미지 유지 + 로깅
-            print("image url 생성 오류, 기본 이미지로 대체")
+        if settings.DEBUG:
+            save_path = os.path.join("profile_image", profile_image.name)
 
-    # DB 저장 (중복 아이디 방어)
+            stored_name = default_storage.save(save_path, profile_image)
+            relative_url = default_storage.url(stored_name)
+            image_url = request.build_absolute_uri(relative_url)
+        else:
+            s3_client = S3Client()
+            uploaded_url = s3_client.upload(profile_image)
+            if uploaded_url:
+                image_url = uploaded_url
+            else:
+                print("image url 생성 오류, 기본 이미지로 대체")
+
+    # DB 저장
     try:
         with transaction.atomic():
             user = User(
@@ -218,8 +221,7 @@ def signup_view(request: HttpRequest):
                 is_active=True,
                 profile_image=image_url,
             )
-            user.set_password(password)  # 해시 저장
-            # user.is_active = False
+            user.set_password(password)
 
             user.save()
             ApprovalLog.objects.get_or_create(
@@ -234,9 +236,7 @@ def signup_view(request: HttpRequest):
     return redirect("uauth:login")
 
 
-# -----------------------------
-# (옵션) JSON API - 필요 시 사용
-# -----------------------------
+# JSON API
 @csrf_protect
 @require_http_methods(["POST"])
 def signup_api(request: HttpRequest) -> JsonResponse:
@@ -245,16 +245,12 @@ def signup_api(request: HttpRequest) -> JsonResponse:
     except Exception:
         return JsonResponse({"ok": False, "msg": "Invalid JSON"}, status=400)
 
-    # 실사용 시 폼/검증 추가 후 저장 로직 구현
     return JsonResponse({"ok": False, "msg": "Not implemented"}, status=400)
 
 
-# --- pending페이지---
-
-
+# pending페이지
 @login_required
 def pending_view(request):
-    # 내 최신 상태를 확인해서 승인/거부되었으면 바로 분기
     latest_log = (
         ApprovalLog.objects.filter(user=request.user).order_by("-created_at").first()
     )
@@ -265,7 +261,6 @@ def pending_view(request):
     if current_status == Status.REJECTED:
         return redirect("uauth:reject")
 
-    # 여전히 PENDING이면 대기 페이지
     return render(request, "uauth/pending.html")
 
 
@@ -281,14 +276,12 @@ def reject_view(request):
     if current_status == Status.PENDING:
         return redirect("uauth:pending")
 
-    # 1) action 값 대소문자/라벨 오차까지 허용
     approval_log = (
         ApprovalLog.objects.filter(user=request.user, action__iexact="rejected")
         .order_by("-created_at")
         .first()
     )
 
-    # 2) 거부 로그가 없을 경우 대비(상태는 Rejected인데 로그가 없을 수 있음)
     if not approval_log:
         approval_log = (
             ApprovalLog.objects.filter(user=request.user)
@@ -296,5 +289,4 @@ def reject_view(request):
             .first()
         )
 
-    # 템플릿에 넘겨야 화면에 보임
     return render(request, "uauth/reject.html", {"approval_log": approval_log})

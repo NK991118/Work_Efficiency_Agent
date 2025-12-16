@@ -54,7 +54,7 @@ TEMPLATES = [
         "BACKEND": "django.template.backends.django.DjangoTemplates",
         # main/templates 를 전역 템플릿 디렉터리로 사용
         "DIRS": [BASE_DIR / "main" / "templates"],
-        "APP_DIRS": True,  # 각 앱의 templates/도 자동 탐색
+        "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.debug",
@@ -68,16 +68,15 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "codenova.wsgi.application"
 
-# # --- Database ---
 # --- Database ---
-
 # DATABASES = {
 #     "default": {
 #         "ENGINE": "django.db.backends.sqlite3",
 #         "NAME": BASE_DIR / "db.sqlite3",
 #     }
 # }
-# MySQL 사용 시 아래 예시 사용
+
+# MySQL 사용
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.mysql",
@@ -110,16 +109,19 @@ USE_TZ = True
 
 # --- Static / Media ---
 STATIC_URL = "/static/"
-STATIC_ROOT = BASE_DIR / "staticfiles"  # collectstatic 결과물
-STATICFILES_DIRS = [BASE_DIR / "main" / "static"]  # 개발용 정적 소스
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_DIRS = [BASE_DIR / "main" / "static"]
+
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
 
 
 # --- Defaults ---
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
-LOGIN_URL = reverse_lazy("uauth:login")  # 루트('/')로 resolve됨 (현 구조에서)
-LOGIN_REDIRECT_URL = reverse_lazy("main:home")  # 실제 라우트 이름에 맞게
+LOGIN_URL = reverse_lazy("uauth:login")
+LOGIN_REDIRECT_URL = reverse_lazy("main:home")
 LOGOUT_REDIRECT_URL = reverse_lazy("uauth:login")
 
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
@@ -127,5 +129,5 @@ AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY")
 AWS_STORAGE_BUCKET_NAME = os.environ.get("AWS_STORAGE_BUCKET_NAME")
 AWS_S3_REGION_NAME = os.environ.get(
     "AWS_S3_REGION_NAME", "ap-northeast-2"
-)  # 기본값 설정
+)
 AWS_STORAGE_BUCKET_NAME2 = os.environ.get("AWS_STORAGE_BUCKET_NAME2")
