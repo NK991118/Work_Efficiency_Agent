@@ -1,6 +1,9 @@
 import json
 import chromadb
-from chromadb.utils import embedding_functions
+
+import threading
+import torch
+from sentence_transformers import SentenceTransformer
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
@@ -186,23 +189,58 @@ def delete_post(request, post_id):
 
 
 collection = None
-doc_ids = []
-doc_texts = []
-okt = None
+search_lock = threading.Lock()
+bge = None
 
+class Bge_M3:
+    def model(self):
+        global bge
+        if bge is None:
+            with search_lock:
+                if bge is None:
+                    bge = SentenceTransformer("BAAI/bge-m3", device="cpu")
+        return bge
+    
+    def texts(self, input):
+        if isinstance(input, (list, tuple)):
+            _texts = list(input)
+            
+        else:
+            _texts = [input]
+        return ["" if t is None else str(t) for t in _texts]
+    
+    def __call__(self, input):
+        with torch.inference_mode():
+            return self.model().encode(
+                self.texts(input),
+                normalize_embeddings=True).tolist()
+    
+    def embed_query(self, input):
+        with torch.inference_mode():
+            return self.model().encode(self.texts(input), normalize_embeddings=True).tolist()
+
+    def embed_documents(self, input):
+        with torch.inference_mode():
+            return self.model().encode(self.texts(input), normalize_embeddings=True).tolist()
+
+
+embedding_fn = Bge_M3()
 
 def ensure_search_initialized():
     global collection
 
     if collection is not None:
         return
+    
+    with search_lock:
+        if collection is not None:
+            return
 
-    client = chromadb.PersistentClient(path="apichat/utils/chroma_db")
-    emb = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="BAAI/bge-m3",
-        device="cpu",
-    )
-    collection = client.get_collection(name="google_api_docs", embedding_function=emb)
+        client = chromadb.PersistentClient(path="apichat/utils/chroma_db")
+        collection = client.get_collection(
+            name="google_api_docs",
+            embedding_function = embedding_fn
+            )
 
 
 def normalize_meta(meta, default_doc=""):  # Chroma 메타데이터 정리
@@ -229,7 +267,8 @@ def normalize_meta(meta, default_doc=""):  # Chroma 메타데이터 정리
         else:
             source = s
 
-    snippet = (default_doc or "")[:220]
+    # snippet = (default_doc or "")[:220]
+    snippet = (meta.get("snippet") or meta.get("preview") or "")[:220]
 
     return {
         "title": title,
@@ -240,18 +279,23 @@ def normalize_meta(meta, default_doc=""):  # Chroma 메타데이터 정리
 
 def search_dense(q, k):
     ensure_search_initialized()
+    if collection is None:
+        return []
+    
     res = collection.query(
         query_texts=[q],
         n_results=k * 3,
-        include=["documents", "metadatas"],
+        # include=["documents", "metadatas"],
+        include=["metadatas"],
     )
-    docs = res["documents"][0]
-    metas = res["metadatas"][0]
-    ids = res["ids"][0]
+    # docs = res["documents"][0]
+    metas = (res.get("metadatas") or [[]])[0]
+    ids = (res.get("ids") or [[]])[0]
 
     rows, seen = [], set()
-    for i, (doc, meta) in enumerate(zip(docs, metas)):
-        norm = normalize_meta(meta or {}, doc)
+    # for i, (doc, meta) in enumerate(zip(docs, metas)):
+    for i, meta in zip(ids, metas):
+        norm = normalize_meta(meta or {})
         key = norm["source"] or (norm["title"], norm["snippet"])
         if key in seen:
             continue
@@ -259,7 +303,8 @@ def search_dense(q, k):
 
         rows.append(
             {
-                "id": ids[i],
+                # "id": ids[i],
+                "id": i,
                 "title": norm["title"],
                 "source": norm["source"],
                 "snippet": norm["snippet"],
@@ -273,13 +318,12 @@ def search_dense(q, k):
 @require_GET
 def docsearch(request):
     print("docsearch called with query: ", request.GET.get("q"))
-    ensure_search_initialized()
 
     q = request.GET.get("q", "").strip()
     if not q:
         return JsonResponse({"results": []})
 
-    k = int(request.GET.get("k", 10))  # 기본 10
+    k = int(request.GET.get("k", 10))
 
     dense_rows = search_dense(q, k)
 
