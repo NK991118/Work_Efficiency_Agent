@@ -402,4 +402,4 @@ media/profile/*
 !media/profile/default.png
 
 # Django media files
-web/media/
+/media/
