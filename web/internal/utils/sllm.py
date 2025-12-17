@@ -6,10 +6,6 @@ import logging
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# SLLM_API_URL = os.getenv("SLLM_API_URL")
-
-
-# url = SLLM_API_URL + "/api/v1/chat"
 headers = {"Content-Type": "application/json"}
 
 
@@ -23,13 +19,6 @@ def run_sllm(history, permission="none", tone="formal"):
     logger.info(f"permission={permission}, tone={tone}")
     data = {"history": history, "permission": permission, "tone": tone}
 
-    # response = requests.post(url, headers=headers, json=data)
-    # response = requests.post(url, headers=headers, json=data, timeout=(5, 180))
-    
-    # if not response.ok:
-    #     raise RuntimeError(f"sLLM error {response.status_code}: {response.text[:200]}")
-
-    # res = response.json()
     response = requests.post(url, headers=headers, json=data, timeout=120)
 
     if response.status_code != 200:
