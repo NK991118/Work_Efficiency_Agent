@@ -400,3 +400,6 @@ media/profile/*
 
 # 단, default.png는 예외로 추적
 !media/profile/default.png
+
+# Django media files
+web/media/
