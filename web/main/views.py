@@ -189,7 +189,7 @@ def delete_post(request, post_id):
 
 
 collection = None
-search_lock = threading.Lock()
+search_lock = threading.RLock()
 bge = None
 
 class Bge_M3:
@@ -200,29 +200,43 @@ class Bge_M3:
                 if bge is None:
                     bge = SentenceTransformer("BAAI/bge-m3", device="cpu")
         return bge
-    
-    def texts(self, input):
-        if isinstance(input, (list, tuple)):
-            _texts = list(input)
-            
+
+    def _to_texts(self, x):
+        if isinstance(x, str):
+            xs = [x]
+        elif isinstance(x, (list, tuple)):
+            xs = list(x)
         else:
-            _texts = [input]
-        return ["" if t is None else str(t) for t in _texts]
-    
-    def __call__(self, input):
+            xs = [x]
+        return ["" if t is None else str(t) for t in xs]
+
+    def embed_documents(self, texts):
+        texts = self._to_texts(texts)
         with torch.inference_mode():
-            return self.model().encode(
-                self.texts(input),
-                normalize_embeddings=True).tolist()
-    
+            embs = self.model().encode(
+                texts,
+                normalize_embeddings=True,
+                batch_size=1,
+                show_progress_bar=False,
+            )
+        return embs.tolist() 
+
     def embed_query(self, input):
-        with torch.inference_mode():
-            return self.model().encode(self.texts(input), normalize_embeddings=True).tolist()
+        is_batch = isinstance(input, (list, tuple))
+        texts = self._to_texts(input)
 
-    def embed_documents(self, input):
         with torch.inference_mode():
-            return self.model().encode(self.texts(input), normalize_embeddings=True).tolist()
+            embs = self.model().encode(
+                texts,
+                normalize_embeddings=True,
+                batch_size=1,
+                show_progress_bar=False,
+            )
 
+        return embs.tolist() if is_batch else embs[0].tolist()
+
+    def __call__(self, input):
+        return self.embed_documents(input)
 
 embedding_fn = Bge_M3()
 
@@ -243,7 +257,7 @@ def ensure_search_initialized():
             )
 
 
-def normalize_meta(meta, default_doc=""):  # Chroma 메타데이터 정리
+def normalize_meta(meta, default_doc=""):
     raw_file = meta.get("source_file", "")
     if raw_file.endswith(".txt"):
         title = raw_file[:-4]
@@ -255,7 +269,7 @@ def normalize_meta(meta, default_doc=""):  # Chroma 메타데이터 정리
         source = (source[0] or "").strip()
     elif isinstance(source, str):
         s = source.strip()
-        if s[:1] in "[{":  # JSON 형태라면 url 추출
+        if s[:1] in "[{": 
             try:
                 data = json.loads(s)
                 if isinstance(data, list) and data:
@@ -267,33 +281,37 @@ def normalize_meta(meta, default_doc=""):  # Chroma 메타데이터 정리
         else:
             source = s
 
-    # snippet = (default_doc or "")[:220]
     snippet = (meta.get("snippet") or meta.get("preview") or "")[:220]
 
     return {
         "title": title,
         "source": source,
         "snippet": snippet,
-    }
-
+}
+    
+def lexical_bonus(row, q: str) -> int:
+    q_tokens = [t for t in q.lower().split() if t]
+    title = (row.get("title") or "").lower()
+    src = (row.get("source") or "").lower()
+    return sum(1 for t in q_tokens if (t in title or t in src))
 
 def search_dense(q, k):
     ensure_search_initialized()
     if collection is None:
         return []
-    
-    res = collection.query(
-        query_texts=[q],
-        n_results=k * 3,
-        # include=["documents", "metadatas"],
-        include=["metadatas"],
-    )
-    # docs = res["documents"][0]
+    with search_lock:
+        print("before query")
+        res = collection.query(
+            query_texts=[q],
+            n_results=k * 3,
+            include=["metadatas"],
+        )
+        print("after query")
+        
     metas = (res.get("metadatas") or [[]])[0]
     ids = (res.get("ids") or [[]])[0]
 
     rows, seen = [], set()
-    # for i, (doc, meta) in enumerate(zip(docs, metas)):
     for i, meta in zip(ids, metas):
         norm = normalize_meta(meta or {})
         key = norm["source"] or (norm["title"], norm["snippet"])
@@ -303,7 +321,6 @@ def search_dense(q, k):
 
         rows.append(
             {
-                # "id": ids[i],
                 "id": i,
                 "title": norm["title"],
                 "source": norm["source"],
@@ -312,12 +329,6 @@ def search_dense(q, k):
         )
         if len(rows) >= k:
             break
-        
-        def lexical_bonus(row, q: str) -> int:
-            q_tokens = [t for t in q.lower().split() if t]
-            title = (row.get("title") or "").lower()
-            src = (row.get("source") or "").lower()
-            return sum(1 for t in q_tokens if (t in title or t in src))
         
     rows.sort(key=lambda r: lexical_bonus(r, q), reverse=True)
 
