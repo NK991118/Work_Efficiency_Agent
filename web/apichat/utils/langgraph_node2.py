@@ -11,13 +11,18 @@ from .rag2 import (
     answer_quality_chain_setting_rag,
     alternative_queries_chain_setting,
 )
-from .retriever import retriever_setting
-from .retriever_qa import retriever_setting2
+
 from .retriever_hybrid import hybrid_retriever_setting, hybrid_retriever_setting_qa
 
 import openai
 from dotenv import load_dotenv
 import os
+
+import base64
+import mimetypes
+from urllib.parse import urlparse
+from django.conf import settings
+
 
 load_dotenv()
 
@@ -26,8 +31,6 @@ client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 basic_chain = basic_chain_setting()
-# vs = retriever_setting()
-# qa_vs = retriever_setting2()
 query_chain = query_setting()
 classification_chain = classify_chain_setting()
 simple_chain = simple_chain_setting()
@@ -79,7 +82,7 @@ def classify(state: ChatState):
     chat_history = state.get("messages", [])
     chat_history = chat_history[-4:]
 
-    # 이미지 분석 결과가 있으면 질문에 포함시킴
+    # 이미지 분석 결과가 있으면 질문에 포함
     if state.get("image_analysis"):
         question = (
             f"사용자의 이번 질문:{question}"
@@ -101,46 +104,106 @@ def route_from_classify(state):
     # classification_chain이 실제로 뭘 반환하는지에 따라 매핑
     return route
 
-
 def analyze_image(state: ChatState) -> ChatState:
     """ChatState의 이미지를 분석하는 함수"""
     print(f"analyze_image 호출됨 - 이미지 존재: {bool(state.get('image'))}")
-    if state.get("image"):
-        try:
-            # GPT-4 Vision API 호출
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "이 이미지에 대해 자세히 설명해주세요.",
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": state["image"]  # URL이면 그대로 사용
-                                },
-                            },
-                        ],
-                    }
-                ],
-                max_tokens=500,
-            )
-
-            answer = response.choices[0].message.content
-            state["image_analysis"] = (
-                answer  # 원본 이미지는 유지하고 분석 결과를 별도 필드에 저장
-            )
-            return state
-        except Exception as e:
-            print(f"이미지 분석 에러: {str(e)}")
-            state["image_analysis"] = f"이미지 분석 중 오류가 발생했습니다: {str(e)}"
-            return state
-    else:
+    if not state.get("image"):
         return state
+
+    try:
+        img = state["image"]
+
+        path = urlparse(img).path  # "/media/....png"
+        if path.startswith(settings.MEDIA_URL):
+            rel = path[len(settings.MEDIA_URL):].lstrip("/")  # "chatimage/xxx.png"
+            local_path = os.path.join(settings.MEDIA_ROOT, rel)
+
+            if os.path.exists(local_path):
+                mime, _ = mimetypes.guess_type(local_path)
+                mime = mime or "image/png"
+                with open(local_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                img = f"data:{mime};base64,{b64}"
+            else:
+                print(f"이미지 파일이 로컬에 없음: {local_path}")
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "이 이미지에 대해 자세히 설명해주세요."},
+                        {"type": "image_url", "image_url": {"url": img}},  # ✅ state["image"] 말고 img
+                    ],
+                }
+            ],
+            max_tokens=500,
+        )
+
+        state["image_analysis"] = response.choices[0].message.content
+        return state
+
+    except Exception as e:
+        print(f"이미지 분석 에러: {str(e)}")
+        state["image_analysis"] = f"이미지 분석 중 오류가 발생했습니다: {str(e)}"
+        return state
+
+
+# def analyze_image(state: ChatState) -> ChatState:
+#     """ChatState의 이미지를 분석하는 함수"""
+#     print(f"analyze_image 호출됨 - 이미지 존재: {bool(state.get('image'))}")
+#     if not state.get("image"):
+#         return state
+    
+#     try:
+#         img = state["image"]
+        
+#         path = urlparse(img).path  # "/media/....png" 로 정리됨
+#     if path.startswith(settings.MEDIA_URL):
+#         rel = path[len(settings.MEDIA_URL):].lstrip("/")  # "chatimage/xxx.png"
+#         local_path = os.path.join(settings.MEDIA_ROOT, rel)
+#         if os.path.exists(local_path):
+#             mime, _ = mimetypes.guess_type(local_path)
+#             mime = mime or "image/png"
+#             with open(local_path, "rb") as f:
+#                 b64 = base64.b64encode(f.read()).decode("utf-8")
+#             img = f"data:{mime};base64,{b64}"
+#         else:
+#             print(f"이미지 파일이 로컬에 없음: {local_path}")
+            
+#         response = client.chat.completions.create(
+#             model="gpt-4o",
+#             messages=[
+#                 {
+#                     "role": "user",
+#                     "content": [
+#                         {
+#                             "type": "text",
+#                             "text": "이 이미지에 대해 자세히 설명해주세요.",
+#                         },
+#                         {
+#                             "type": "image_url",
+#                             "image_url": {
+#                                 "url": state["image"]
+#                             },
+#                         },
+#                     ],
+#                 }
+#             ],
+#             max_tokens=500,
+#         )
+
+#         answer = response.choices[0].message.content
+#         state["image_analysis"] = answer
+#         return state
+    
+#     except Exception as e:
+#         print(f"이미지 분석 에러: {str(e)}")
+#         state["image_analysis"] = f"이미지 분석 중 오류가 발생했습니다: {str(e)}"
+#         return state
+    # else:
+    #     return state
 
 
 # (1) 사용자 질문 + 히스토리 통합 → 통합된 질문과 쿼리 추출
@@ -148,7 +211,7 @@ def extract_queries(state: ChatState) -> ChatState:
     user_text = state["question"]
     image_text = state.get(
         "image_analysis"
-    )  # 이미지 설명 (이 부분은 이미 전달된 이미지 설명이어야 함)
+    )
 
     # 히스토리에서 최근 몇 개의 메시지를 가져와서 통합 질문을 생성
     messages = state.get("messages", [])
@@ -179,7 +242,7 @@ def split_queries(state: ChatState) -> ChatState:
     rewritten = state.get("rewritten")
 
     response = query_chain.invoke({"rewritten": rewritten})
-    state["queries"] = response["questions"]  # questions 리스트만 저장
+    state["queries"] = response["questions"]
 
     return state
 
@@ -252,7 +315,7 @@ def tool_based_search_node(state: ChatState) -> ChatState:
             if tool_call["name"] == "vector_search_tool":
                 # 툴 실행
                 args = tool_call["args"]
-                if state["retry"]:
+                if state.get("retry"):
                     args["text_k"] = 15
                     args["qa_k"] = 30
                 result = vector_search_tool.invoke(args)
@@ -268,8 +331,7 @@ def tool_based_search_node(state: ChatState) -> ChatState:
                     }
                 )
 
-    # state['search_results'] = search_results
-    if not state["retry"]:
+    if not state.get("retry"):
         state["search_results"] = list(dict.fromkeys(search_results))
         state["qa_search_results"] = list(dict.fromkeys(qa_search_results))
     else:
@@ -278,28 +340,25 @@ def tool_based_search_node(state: ChatState) -> ChatState:
 
     state["tool_calls"] = tool_calls
 
-    # print(f"[tool_based_search_node] 실행 - state['search_results']={state['search_results']}")
-    # print(f"[tool_based_search_node] 실행 - state['qa_search_results']={state['qa_search_results']}")
-
     return state
 
 
 # (4) 기본 답변 생성 노드
 def basic_langgraph_node(state: ChatState) -> Dict[str, Any]:
     """질문에 대한 기본 답변 생성"""
-    search_results_text = state["search_results"]
-    search_results_qa = state["qa_search_results"]
+    search_results_text = state.get("search_results", [])
+    search_results_qa = state.get("qa_search_results", [])
 
     search_results_text2 = []
     search_results_qa2 = []
-    if state["retry"]:
+    if state.get("retry"):
         search_results_text2 = state["hyde_text_results"]
         search_results_qa2 = state["hyde_qa_results"]
 
     history = state["messages"][-4:]
     question = state["question"]
 
-    # 이미지 분석 결과가 있으면 질문에 포함시킴
+    # 이미지 분석 결과가 있으면 질문에 포함
     if state.get("image_analysis"):
         question = (
             f"사용자의 이번 질문:{question}"
@@ -329,7 +388,7 @@ def basic_langgraph_node(state: ChatState) -> Dict[str, Any]:
 
     print(f"[basic_langgraph_node] 생성된 답변: {answer}")
 
-    return state  # 답변을 반환
+    return state
 
 
 # (5) 일상 질문 답변 노드
@@ -340,7 +399,7 @@ def simple(state: ChatState):
     chat_history = state.get("messages", [])
     chat_history = chat_history[-4:]
 
-    # 이미지 분석 결과가 있으면 질문에 포함시킴
+    # 이미지 분석 결과가 있으면 질문에 포함
     if state.get("image_analysis"):
         question = (
             f"사용자의 이번 질문:{question}"
@@ -358,7 +417,7 @@ def simple(state: ChatState):
 
     state["answer"] = answer
 
-    return state  # 답변을 반환
+    return state
 
 
 # (5) 답변할 수 없는 질문(구글 api 혹은 일상 질문 아닌 경우)
@@ -369,7 +428,7 @@ def impossible(state: ChatState):
     chat_history = state.get("messages", [])
     chat_history = chat_history[-4:]
 
-    # 이미지 분석 결과가 있으면 질문에 포함시킴
+    # 이미지 분석 결과가 있으면 질문에 포함
     if state.get("image_analysis"):
         question = (
             f"사용자의 이번 질문:{question}"
@@ -387,7 +446,7 @@ def impossible(state: ChatState):
 
     state["answer"] = answer
 
-    return state  # 답변을 반환
+    return state
 
 
 def evaluate_answer_node(state: ChatState) -> str:
