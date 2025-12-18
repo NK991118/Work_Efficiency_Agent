@@ -55,7 +55,7 @@ index.html [https://github.com/googlemaps/js-samples/blob/2683f7366fb27829401945
       for more information.
       -->
     <script
-      src="https://maps.googleapis.com/maps/api/js?key=AIzaSyB41DRUbKWJHPxaFjMAwdrzWzbVKartNGg&libraries=maps&v=beta"
+      src="https://maps.googleapis.com/maps/api/js?key=<GOOGLE_MAPS_API_KEY>&libraries=maps&v=beta"
       defer
     ></script>
   </body>
